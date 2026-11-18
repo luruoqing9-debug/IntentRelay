@@ -1,0 +1,15 @@
+.env
+.env.*
+__pycache__/
+venv/
+.venv/
+*.pyc
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.gguf
+models/
+node_modules/
+.claude/
+*.log
