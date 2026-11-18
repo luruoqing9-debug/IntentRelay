@@ -1,0 +1,536 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		4130C7132F93750A00F2952B /* RealityKitContent in Frameworks */ = {isa = PBXBuildFile; productRef = 4130C7122F93750A00F2952B /* RealityKitContent */; };
+		41B84CF22F93EED90009D45A /* ReplayKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 41B84CF12F93EED90009D45A /* ReplayKit.framework */; };
+		41B84CF92F93EED90009D45A /* IntentRelayRecorder.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 41B84CEF2F93EED90009D45A /* IntentRelayRecorder.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		41B84CF72F93EED90009D45A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4130C7052F93750A00F2952B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 41B84CEE2F93EED90009D45A;
+			remoteInfo = IntentRelayRecorder;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		41B84CFE2F93EED90009D45A /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				41B84CF92F93EED90009D45A /* IntentRelayRecorder.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		4130C70D2F93750A00F2952B /* IntentRelay.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = IntentRelay.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4130C7112F93750A00F2952B /* RealityKitContent */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = RealityKitContent; sourceTree = "<group>"; };
+		41B84CEF2F93EED90009D45A /* IntentRelayRecorder.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = IntentRelayRecorder.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		41B84CF12F93EED90009D45A /* ReplayKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = System/Library/Frameworks/ReplayKit.framework; sourceTree = SDKROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		4130C7282F93750B00F2952B /* Exceptions for "IntentRelay" folder in "IntentRelay" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 4130C70C2F93750A00F2952B /* IntentRelay */;
+		};
+		41B84CFD2F93EED90009D45A /* Exceptions for "IntentRelayRecorder" folder in "IntentRelayRecorder" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 41B84CEE2F93EED90009D45A /* IntentRelayRecorder */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		4130C70F2F93750A00F2952B /* IntentRelay */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				4130C7282F93750B00F2952B /* Exceptions for "IntentRelay" folder in "IntentRelay" target */,
+			);
+			path = IntentRelay;
+			sourceTree = "<group>";
+		};
+		41B84CF32F93EED90009D45A /* IntentRelayRecorder */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				41B84CFD2F93EED90009D45A /* Exceptions for "IntentRelayRecorder" folder in "IntentRelayRecorder" target */,
+			);
+			path = IntentRelayRecorder;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4130C70A2F93750A00F2952B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4130C7132F93750A00F2952B /* RealityKitContent in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		41B84CEC2F93EED90009D45A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				41B84CF22F93EED90009D45A /* ReplayKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		4130C7042F93750A00F2952B = {
+			isa = PBXGroup;
+			children = (
+				4130C70F2F93750A00F2952B /* IntentRelay */,
+				4130C7102F93750A00F2952B /* Packages */,
+				41B84CF32F93EED90009D45A /* IntentRelayRecorder */,
+				41B84CF02F93EED90009D45A /* Frameworks */,
+				4130C70E2F93750A00F2952B /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		4130C70E2F93750A00F2952B /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4130C70D2F93750A00F2952B /* IntentRelay.app */,
+				41B84CEF2F93EED90009D45A /* IntentRelayRecorder.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		4130C7102F93750A00F2952B /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				4130C7112F93750A00F2952B /* RealityKitContent */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		41B84CF02F93EED90009D45A /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				41B84CF12F93EED90009D45A /* ReplayKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4130C70C2F93750A00F2952B /* IntentRelay */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4130C7292F93750B00F2952B /* Build configuration list for PBXNativeTarget "IntentRelay" */;
+			buildPhases = (
+				4130C7092F93750A00F2952B /* Sources */,
+				4130C70A2F93750A00F2952B /* Frameworks */,
+				4130C70B2F93750A00F2952B /* Resources */,
+				41B84CFE2F93EED90009D45A /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				41B84CF82F93EED90009D45A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				4130C70F2F93750A00F2952B /* IntentRelay */,
+			);
+			name = IntentRelay;
+			packageProductDependencies = (
+				4130C7122F93750A00F2952B /* RealityKitContent */,
+			);
+			productName = IntentRelay;
+			productReference = 4130C70D2F93750A00F2952B /* IntentRelay.app */;
+			productType = "com.apple.product-type.application";
+		};
+		41B84CEE2F93EED90009D45A /* IntentRelayRecorder */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 41B84CFA2F93EED90009D45A /* Build configuration list for PBXNativeTarget "IntentRelayRecorder" */;
+			buildPhases = (
+				41B84CEB2F93EED90009D45A /* Sources */,
+				41B84CEC2F93EED90009D45A /* Frameworks */,
+				41B84CED2F93EED90009D45A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				41B84CF32F93EED90009D45A /* IntentRelayRecorder */,
+			);
+			name = IntentRelayRecorder;
+			packageProductDependencies = (
+			);
+			productName = IntentRelayRecorder;
+			productReference = 41B84CEF2F93EED90009D45A /* IntentRelayRecorder.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		4130C7052F93750A00F2952B /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1610;
+				LastUpgradeCheck = 1610;
+				TargetAttributes = {
+					4130C70C2F93750A00F2952B = {
+						CreatedOnToolsVersion = 16.1;
+					};
+					41B84CEE2F93EED90009D45A = {
+						CreatedOnToolsVersion = 16.1;
+					};
+				};
+			};
+			buildConfigurationList = 4130C7082F93750A00F2952B /* Build configuration list for PBXProject "IntentRelay" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 4130C7042F93750A00F2952B;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 4130C70E2F93750A00F2952B /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				41B84CEE2F93EED90009D45A /* IntentRelayRecorder */,
+				4130C70C2F93750A00F2952B /* IntentRelay */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4130C70B2F93750A00F2952B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		41B84CED2F93EED90009D45A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4130C7092F93750A00F2952B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		41B84CEB2F93EED90009D45A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		41B84CF82F93EED90009D45A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 41B84CEE2F93EED90009D45A /* IntentRelayRecorder */;
+			targetProxy = 41B84CF72F93EED90009D45A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		4130C72A2F93750B00F2952B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = IntentRelay/IntentRelay.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"IntentRelay/Preview Content\"";
+				DEVELOPMENT_TEAM = 3P4ZDHV5L9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "$(TARGET_NAME)/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ZhaoquJiang.RefinityAI.IntentRelay;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
+			};
+			name = Debug;
+		};
+		4130C72B2F93750B00F2952B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = IntentRelay/IntentRelay.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"IntentRelay/Preview Content\"";
+				DEVELOPMENT_TEAM = 3P4ZDHV5L9;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "$(TARGET_NAME)/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ZhaoquJiang.RefinityAI.IntentRelay;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
+			};
+			name = Release;
+		};
+		4130C72C2F93750B00F2952B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = xros;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				XROS_DEPLOYMENT_TARGET = 2.1;
+			};
+			name = Debug;
+		};
+		4130C72D2F93750B00F2952B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = xros;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+				XROS_DEPLOYMENT_TARGET = 2.1;
+			};
+			name = Release;
+		};
+		41B84CFB2F93EED90009D45A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = IntentRelayRecorder/IntentRelayRecorder.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3P4ZDHV5L9;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = IntentRelayRecorder/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = IntentRelayRecorder;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ZhaoquJiang.RefinityAI.IntentRelay.IntentRelayRecorder;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
+			};
+			name = Debug;
+		};
+		41B84CFC2F93EED90009D45A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = IntentRelayRecorder/IntentRelayRecorder.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3P4ZDHV5L9;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = IntentRelayRecorder/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = IntentRelayRecorder;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ZhaoquJiang.RefinityAI.IntentRelay.IntentRelayRecorder;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 7;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4130C7082F93750A00F2952B /* Build configuration list for PBXProject "IntentRelay" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4130C72C2F93750B00F2952B /* Debug */,
+				4130C72D2F93750B00F2952B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4130C7292F93750B00F2952B /* Build configuration list for PBXNativeTarget "IntentRelay" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4130C72A2F93750B00F2952B /* Debug */,
+				4130C72B2F93750B00F2952B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		41B84CFA2F93EED90009D45A /* Build configuration list for PBXNativeTarget "IntentRelayRecorder" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				41B84CFB2F93EED90009D45A /* Debug */,
+				41B84CFC2F93EED90009D45A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4130C7122F93750A00F2952B /* RealityKitContent */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RealityKitContent;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 4130C7052F93750A00F2952B /* Project object */;
+}
