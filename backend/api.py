@@ -1,0 +1,2224 @@
+"""
+api.py - HTTP API 接口层
+
+遵循 main.py 的业务逻辑，不过度拆分也不过度整合。
+
+启动方式：python api.py
+服务地址：http://refinity-protofusion.pub.hsuni.top:15902
+
+文件夹说明：
+├── original_image/      → 参考图（始终只有一张，上传新图时自动替换旧的）
+│                          部件生成：部件参考图
+│                          整体生成：粗糙结构参考图
+├── Operated_image/      → 操作记录图（临时，VLM分析后清空）
+├── Component_three/     → 部件生成的三张候选图（临时，用户选择后清空）
+├── generated_images/    → 用户选择的部件图（临时，存入记忆后移动到 processed_images）
+├── processed_images/    → 已存记忆的图片（永久保留，前端使用此路径）
+
+接口分类：
+├── 系统控制
+│   ├── GET  /health           - 健康检查
+│   ├── POST /init             - 初始化系统
+│   ├── POST /stop             - 停止系统
+│
+├── VLM 分析（使用 Operated_image，分析后清空）
+│   ├── POST /vlm_analysis     - 语音触发（可选图片）
+│   ├── POST /vlm_analysis_images - 手势触发（必需图片）
+│
+├── AI 反馈
+│   ├── POST /ai_feedback      - 按需调用（should_feedback=true 时）
+│   ├── POST /qa_switch        - 问答处理
+│
+├── 用户反馈
+│   ├── POST /user_feedback    - 处理用户对AI建议的反馈（更新评分权重）
+│
+├── 图像生成（自动读取 original_image，输出到 Component_three 或 generated_images）
+│   ├── POST /generate_prompt     - 生成提示词（自动检测粗糙参考图）
+│   ├── POST /generate_image      - 调用 ComfyUI 生成图像
+│                          mode=1（部件）：三张候选图保存到 Component_three/
+│                          mode=2（整体）：自动读取 processed_images/ 部件图 + original_image/ 粗糙参考图
+│   ├── POST /select_component_image - 用户从 Component_three/ 选择一张部件图
+│   ├── POST /update_memory_from_prompt - 对比提示词变化，自动更新记忆
+│   ├── POST /generate_from_answer - 从AI回答生成图片（mico=1问答后调用，自动清空记录）
+│
+├── 状态查询
+│   ├── GET  /memory_status    - 查询系统状态
+│   ├── GET  /components_list  - 获取部件列表
+│   ├── GET  /components_info  - 获取部件详情
+│   ├── POST /update_description - 修改部件描述内容
+│   ├── POST /memory_qa        - 单轮问答：问一句答一句
+│   ├── GET  /uncertain_suggestions - 获取不确定内容建议
+│   ├── POST /confirm_suggestion    - 确认采纳不确定建议
+│
+├── 语音管理
+│   ├── GET  /speech_text      - 获取累积语音文本
+│   ├── POST /speech_clear     - 清空语音文本
+│   ├── POST /speech_transcribe - 录音文件转写（iOS端上传WAV，讯飞文件转写）
+│
+├── mico 模式管理
+│   ├── GET  /mico_mode        - 获取当前模式
+│   ├── POST /mico_switch      - 切换模式
+"""
+
+import os
+import sys
+import json
+import threading
+import time
+import urllib.parse
+import base64
+import mimetypes
+
+# 注册 .usdz MIME 类型（RealityKit 要求）
+mimetypes.add_type('model/vnd.usdz+zip', '.usdz')
+mimetypes.add_type('model/gltf-binary', '.glb')
+
+# 禁用警告
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
+from flask import Flask, request, jsonify, Response, render_template_string, send_file
+from flask_cors import CORS
+
+# YOLO 相关导入
+import cv2
+import numpy as np
+from copy import deepcopy
+from ultralytics import YOLO
+from viewpoint import get_resolution_and_viewpoint_base64
+
+print("[api.py] 正在导入模块...")
+
+# ==================== 导入 main.py 的函数 ====================
+
+from main import (
+    # 系统控制
+    init_system,
+    stop_system,
+    memory_db,
+    save_memory,
+
+    # 核心业务流程
+    handle_vlm_analysis,
+    handle_vlm_analysis_with_text,
+    handle_qa_switch,
+
+    # 状态查询
+    get_memory_status,
+    get_components_info,
+
+    # 语音管理
+    get_current_speech_text,
+    clear_speech_text,
+
+    # mico 模式管理
+    switch_mico_mode,
+    get_current_mico_mode
+)
+
+# 导入 AI 反馈生成函数（供前端按需调用）
+from Feedback import generate_ai_feedback, memory_qa_round, get_uncertain_suggestions, process_user_feedback, confirm_suggestion
+
+# 导入提示词生成函数
+from generate import process_generate_request, update_memory_from_prompt_change
+
+# 导入中文 -> 英文翻译工具（向前端传输前使用；全英文环境下作为残留中文的兜底）
+from translate import translate_to_english, translate_strings
+
+# 导入图像生成函数
+from Generate_image import (
+    generate_component_image,
+    generate_overall_image,
+    get_original_image,
+    get_processed_component_images,
+    generate_image_from_ai_answer,
+    COMPONENT_THREE_DIR
+)
+
+# 导入记忆更新函数
+from Memory import batch_update_images, update_description_content
+
+# 导入讯飞录音文件转写（录音文件转写大模型：upload + getResult）
+from iflytek_asr import transcribe_audio
+
+# 导入 3D 模型生成调度器
+from generate_3d import (
+    generate_3d_model,
+    MODEL_OUTPUT_DIR, MODEL_URL_PREFIX,
+    THREE_D_IMAGE_DIR, THREE_D_IMAGE_URL_PREFIX,
+    get_3d_image, update_3d_image
+)
+
+print("[api.py] 模块导入完成")
+
+
+# ==================== 创建 Flask 应用 ====================
+
+app = Flask(__name__)
+CORS(app)
+
+# ==================== 静态文件服务（图片URL）====================
+
+# 项目目录
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+ORIGINAL_IMAGE_DIR = os.path.join(PROJECT_DIR, "original_image")
+PROCESSED_IMAGE_DIR = os.path.join(PROJECT_DIR, "processed_images")
+GENERATED_IMAGE_DIR = os.path.join(PROJECT_DIR, "generated_images")
+FEEDBACK_IMAGE_DIR = os.path.join(PROJECT_DIR, "Feedback_image")
+
+# 确保文件夹存在
+os.makedirs(ORIGINAL_IMAGE_DIR, exist_ok=True)
+os.makedirs(PROCESSED_IMAGE_DIR, exist_ok=True)
+os.makedirs(GENERATED_IMAGE_DIR, exist_ok=True)
+os.makedirs(FEEDBACK_IMAGE_DIR, exist_ok=True)
+os.makedirs(COMPONENT_THREE_DIR, exist_ok=True)
+os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
+os.makedirs(THREE_D_IMAGE_DIR, exist_ok=True)
+
+
+def path_to_url(local_path: str) -> str:
+    r"""
+    将本地路径转换为 HTTP URL
+
+    Args:
+        local_path: 本地路径，支持多种格式：
+                    - Windows绝对路径：D:\...\original_image\xxx.png
+                    - 相对路径：original_image/xxx.png 或 original_image\xxx.png
+
+    Returns:
+        URL，如 "http://refinity-protofusion.pub.hsuni.top:15902/images/original/xxx.png"
+    """
+    if not local_path:
+        return ""
+
+    # 统一使用正斜杠处理
+    normalized_path = local_path.replace("\\", "/")
+
+    # 提取文件夹名和文件名
+    parts = normalized_path.split("/")
+
+    # 找到文件夹名（original_image、processed_images、generated_images、Feedback_image）
+    folder = None
+    filename = None
+
+    for i, part in enumerate(parts):
+        if part in ["original_image", "processed_images", "generated_images", "Feedback_image", "Component_three"]:
+            folder = part
+            # 文件名是后面的部分
+            filename = parts[i + 1] if i + 1 < len(parts) else None
+            break
+
+    if folder and filename:
+        encoded_filename = urllib.parse.quote(filename)
+        print(f"[path_to_url] 输入: {local_path}")
+        print(f"[path_to_url] folder={folder}, filename={filename}, encoded={encoded_filename}")
+        # 统一 Feedback_image 到 generated_images 路由
+        if folder == "Feedback_image":
+            return f"/images/generated/{encoded_filename}"
+        elif folder == "original_image":
+            return f"/images/original/{encoded_filename}"
+        elif folder == "processed_images":
+            return f"/images/processed/{encoded_filename}"
+        elif folder == "generated_images":
+            return f"/images/generated/{encoded_filename}"
+        elif folder == "Component_three":
+            return f"/images/component_three/{encoded_filename}"
+
+    return local_path
+
+
+@app.route('/images/original/<filename>')
+def serve_original_image(filename):
+    """提供 original_image 文件夹的图片"""
+    filepath = os.path.join(ORIGINAL_IMAGE_DIR, filename)
+    if os.path.exists(filepath):
+        return send_file(filepath)
+    return jsonify({"error": "文件不存在"}), 404
+
+
+@app.route('/images/processed/<filename>')
+def serve_processed_image(filename):
+    """提供 processed_images 文件夹的图片"""
+    filepath = os.path.join(PROCESSED_IMAGE_DIR, filename)
+    if os.path.exists(filepath):
+        return send_file(filepath)
+    return jsonify({"error": "文件不存在"}), 404
+
+
+@app.route('/images/generated/<filename>')
+def serve_generated_image(filename):
+    """提供 generated_images 和 Feedback_image 文件夹的图片"""
+    # 先检查 generated_images
+    filepath = os.path.join(GENERATED_IMAGE_DIR, filename)
+    if os.path.exists(filepath):
+        return send_file(filepath)
+
+    # 再检查 Feedback_image
+    filepath = os.path.join(FEEDBACK_IMAGE_DIR, filename)
+    if os.path.exists(filepath):
+        return send_file(filepath)
+
+    return jsonify({"error": "文件不存在"}), 404
+
+
+@app.route('/images/component_three/<filename>')
+def serve_component_three_image(filename):
+    """提供 Component_three 文件夹的候选图片"""
+    filepath = os.path.join(COMPONENT_THREE_DIR, filename)
+    if os.path.exists(filepath):
+        return send_file(filepath)
+    return jsonify({"error": "文件不存在"}), 404
+
+
+# ==================== YOLO 模型初始化 ====================
+
+print("[api.py] 正在加载 YOLO 模型...")
+yolo_model = YOLO('yolov8x-seg.pt')
+print("[api.py] YOLO 模型加载完毕")
+
+# YOLO 配置
+IS_SHOW_BBOX = False  # 默认隐藏 bbox，可改为 True 显示
+OUTPUT_VIDEO_FPS = 10
+
+# YOLO 全局状态
+latest_processed_frame = None
+yolo_lock = threading.Lock()
+
+
+# ==================== 全局状态 ====================
+
+_system_initialized = False
+
+# 最近一次 /ai_feedback 生成的建议（供 /latest_feedback 读后即焚轮询）
+_latest_feedback = None
+
+
+# ==================== YOLO 处理接口 ====================
+
+@app.route('/yolo_process', methods=['POST'])
+def yolo_process():
+    """
+    YOLO 目标检测处理
+
+    输入:
+        {
+            "frame": "base64编码的图像",
+            "count": 帧序号
+        }
+
+    输出:
+        {
+            "frame": "处理后的图像base64",
+            "count": 帧序号,
+            "detection": [{"name": "物体名", "box": [x1,y1,x2,y2]}],
+            "view_point": [x, y] 或 null
+        }
+    """
+    global latest_processed_frame
+
+    data = request.get_json()
+    img_base64 = data.get("frame")
+    count = data.get("count")
+    detection_info = []
+
+    if img_base64:
+        frame_bytes = base64.b64decode(img_base64)
+        frame_np = cv2.imdecode(np.frombuffer(frame_bytes, np.uint8), cv2.IMREAD_COLOR)
+
+        # YOLO 推理
+        results = yolo_model(frame_np, conf=0.4, iou=0.5, imgsz=(frame_np.shape[0], frame_np.shape[1]))
+
+        boxes = results[0].boxes
+        if boxes is not None and boxes.xyxy is not None and boxes.cls is not None:
+            for box, cls in zip(boxes.xyxy.cpu().numpy(), boxes.cls.cpu().numpy()):
+                name = yolo_model.names[int(cls)]
+                x1, y1, x2, y2 = box
+                detection_info.append({
+                    'name': name,
+                    'box': [float(x1), float(y1), float(x2), float(y2)]
+                })
+
+        # 生成处理后的帧
+        if IS_SHOW_BBOX:
+            processed_frame = results[0].plot(img=frame_np.copy())
+        else:
+            processed_frame = deepcopy(frame_np)
+
+        with yolo_lock:
+            latest_processed_frame = processed_frame
+
+        # 获取视点
+        res, vp = get_resolution_and_viewpoint_base64(img_base64)
+        view_point = [vp[0], vp[1]] if vp else None
+
+        return jsonify({
+            "frame": img_base64,
+            "count": count,
+            "detection": detection_info,
+            "view_point": view_point
+        })
+
+    return jsonify({"error": "no frame"}), 400
+
+
+# 实时预览 HTML 模板
+YOLO_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>YOLO分割实时画面</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; display: flex; justify-content: center; align-items: center; }
+        img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    </style>
+</head>
+<body>
+    <img src="{{ url_for('yolo_feed') }}" ondblclick="toggleFullScreen(this)">
+    <script>
+        function toggleFullScreen(elem) {
+            if (!document.fullscreenElement) {
+                if (elem.requestFullscreen) elem.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) document.exitFullscreen();
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+
+@app.route('/show_yolo')
+def show_yolo():
+    """YOLO 实时预览页面"""
+    return render_template_string(YOLO_HTML_TEMPLATE)
+
+
+def generate_yolo_preview():
+    """生成 YOLO 实时预览流"""
+    last_frame_sent = None
+    while True:
+        frame_to_send = None
+        with yolo_lock:
+            if latest_processed_frame is not None:
+                frame_to_send = latest_processed_frame.copy()
+                last_frame_sent = frame_to_send
+
+        if frame_to_send is None and last_frame_sent is not None:
+            frame_to_send = last_frame_sent
+
+        if frame_to_send is not None:
+            flag, encodedImage = cv2.imencode(".jpg", frame_to_send)
+            if not flag:
+                time.sleep(0.01)
+                continue
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' +
+                   bytearray(encodedImage) + b'\r\n')
+            time.sleep(1/OUTPUT_VIDEO_FPS)
+        else:
+            time.sleep(0.1)
+
+
+@app.route('/yolo_feed')
+def yolo_feed():
+    """YOLO 实时视频流"""
+    return Response(generate_yolo_preview(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+# ==================== 系统控制接口 ====================
+
+@app.route('/health', methods=['GET'])
+def api_health():
+    """
+    健康检查
+
+    输入: 无
+
+    输出:
+        {
+            "status": "ok",
+            "system_initialized": true/false,
+            "speech_running": true/false,
+            "memory_loaded": true/false,
+            "mico_mode": 0/1
+        }
+    """
+    return jsonify({
+        "status": "ok",
+        "system_initialized": _system_initialized,
+        "speech_running": len(memory_db) > 0 and _system_initialized,
+        "memory_loaded": len(memory_db) > 0,
+        "mico_mode": get_current_mico_mode()
+    })
+
+
+@app.route('/init', methods=['POST'])
+def api_init():
+    """
+    初始化系统
+
+    输入: 无
+
+    输出:
+        {
+            "success": true/false,
+            "message": "初始化成功" 或 错误信息,
+            "memory_status": {...}  // 初始化后的记忆状态
+        }
+    """
+    global _system_initialized
+
+    try:
+        if _system_initialized:
+            return jsonify({
+                "success": True,
+                "message": "系统已初始化",
+                "memory_status": get_memory_status()
+            })
+
+        success = init_system()
+        if success:
+            _system_initialized = True
+            return jsonify({
+                "success": True,
+                "message": "系统初始化成功",
+                "memory_status": get_memory_status()
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "系统初始化失败"
+            }), 500
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/stop', methods=['POST'])
+def api_stop():
+    """
+    停止系统
+
+    输入: 无
+
+    输出:
+        {
+            "success": true
+        }
+    """
+    global _system_initialized
+
+    try:
+        stop_system()
+        _system_initialized = False
+        return jsonify({"success": True})
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+# ==================== 核心业务流程接口 ====================
+
+@app.route('/vlm_analysis', methods=['POST'])
+def api_vlm_analysis():
+    """
+    VLM 分析（语音触发）
+
+    文件夹说明：
+    - Operated_image/ → 可选的图像输入（如有则使用，无则纯语音分析）
+    - 如果使用了 Operated_image/ 的图片，分析后会清空该文件夹
+
+    流程：
+    1. 检查语音文本长度
+    2. 从 Operated_image/ 读取图片（如有）
+    3. 有图片 → 多图像 VLM 分析；无图片 → 纯语音 VLM 分析
+    4. 存入记忆（不存图片，只存文本描述）
+    5. 重复检测
+    6. 清空 Operated_image/（如果使用了图片）
+
+    输入:
+        {
+            "transcript_text": "用户说的话",     // 必需：语音文本
+            "trigger_types": ["语音输入触发"]    // 可选：默认为语音输入触发
+        }
+
+    输出:
+        {
+            "success": true/false,
+            "image_count": 0,                 // 分析的图片数量（0=纯语音）
+            "vlm_result": {...},              // VLM 分析结果
+            "node_type": "component/overall", // 存入记忆的节点类型
+            "repeat_count": 3,                // 重复计数
+            "should_feedback": true,          // 是否需要 AI 反馈
+            "parsed_vlm": {...}               // 供 /ai_feedback 使用
+        }
+    """
+    try:
+        data = request.json or {}
+        transcript_text = data.get('transcript_text', '')
+        trigger_types = data.get('trigger_types', ['语音输入触发'])
+
+        if not transcript_text:
+            return jsonify({
+                "success": False,
+                "error": "缺少 transcript_text 参数"
+            }), 400
+
+        # 调用 main.py 的完整流程
+        result = handle_vlm_analysis_with_text(
+            trigger_types=trigger_types,
+            transcript_text=transcript_text
+        )
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/vlm_analysis_images', methods=['POST'])
+def api_vlm_analysis_images():
+    """
+    多图像 VLM 分析（手势触发）
+
+    文件夹说明：
+    - Operated_image/ → VLM 分析输入（摄像头捕获的视频帧）
+    - 分析完成后会自动清空 Operated_image/
+
+    流程：
+    1. 从 Operated_image/ 读取所有图片（按文件名排序）
+    2. VLM 分析图片 + 累积语音文本
+    3. 存入记忆（不存图片，只存文本描述）
+    4. 重复检测
+    5. 清空 Operated_image/
+
+    输入:
+        {
+            "trigger_types": ["手部坐标与物体坐标重叠"]  // 必需
+        }
+
+    trigger_types 可选值：
+        - "手部坐标与物体坐标重叠"（手势触发）
+
+    输出:
+        {
+            "success": true/false,
+            "image_count": 3,                 // 分析的图片数量
+            "vlm_result": {...},              // VLM 分析结果
+            "node_type": "component/overall", // 存入记忆的节点类型
+            "repeat_count": 3,                // 重复计数
+            "should_feedback": true,          // 是否需要 AI 反馈
+            "parsed_vlm": {...}               // 供 /ai_feedback 使用
+        }
+    """
+    try:
+        data = request.json or {}
+        trigger_types = data.get('trigger_types')
+
+        # 必须传入 trigger_types
+        if not trigger_types:
+            return jsonify({
+                "success": False,
+                "error": "缺少 trigger_types 参数（手势触发）"
+            }), 400
+
+        # 调用 main.py 的完整流程
+        result = handle_vlm_analysis(trigger_types=trigger_types)
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/upload_reference_image', methods=['POST'])
+def api_upload_reference_image():
+    """
+    上传参考图到 original_image/ 文件夹。
+    每次上传会替换掉旧的文件（始终只保留一张）。
+
+    输入: multipart/form-data，字段名 "image"
+    输出: {"success": true, "filename": "reference.png"}
+    """
+    try:
+        if 'image' not in request.files:
+            return jsonify({"error": "缺少 image 文件"}), 400
+
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({"error": "文件名为空"}), 400
+
+        # 始终保存为固定文件名，方便后端读取
+        save_filename = "reference.png"
+        save_path = os.path.join(ORIGINAL_IMAGE_DIR, save_filename)
+        file.save(save_path)
+        print(f"[Upload] 参考图已保存: {save_path}")
+
+        return jsonify({
+            "success": True,
+            "filename": save_filename,
+            "url": path_to_url(save_path)
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/generate_prompt', methods=['POST'])
+def api_generate_prompt():
+    """
+    生成图像提示词（前端可修改后再调用 /generate_image）
+
+    说明：
+    - 从记忆数据库（object_nodes.json）获取部件的已有描述信息
+    - mode=2（整体生成）时，系统会自动：
+      - 从 processed_images/ 读取部件数量（排除 overall.png）
+      - 从 original_image/ 检测是否有粗糙参考图
+
+    输入:
+        {
+            "mode": 1 或 2,                        // 必需：1=部件，2=整体
+            "component_name": "履带",              // mode=1 时必需：部件名称
+            "component_image_mapping": {...}       // mode=2 时可选：部件图片索引映射（不传则自动生成）
+        }
+
+    mode=1 输入示例（部件生成）:
+        {
+            "mode": 1,
+            "component_name": "履带"
+        }
+
+    mode=2 输入示例（整体生成）:
+        {
+            "mode": 2
+            // 不需要其他参数，系统自动读取部件图和粗糙参考图
+        }
+
+    输出:
+        {
+            "success": true,
+            "prompt": "圆润流线型履带设计，表面光滑...",
+            "has_reference_image": true/false,  // mode=2时返回：是否有粗糙参考图
+            "overall_image_index": 3,           // mode=2且有粗糙参考图时返回
+            "component_count": 3,               // mode=2时返回：部件数量
+            "component_images": ["履带.png", ...]  // mode=2时返回：部件图片文件名列表
+        }
+    """
+    try:
+        data = request.json or {}
+        mode = data.get('mode')
+        component_name = data.get('component_name')
+        component_image_mapping = data.get('component_image_mapping')
+
+        if mode is None:
+            return jsonify({
+                "success": False,
+                "error": "缺少 mode 参数（1=部件，2=整体）"
+            }), 400
+
+        # mode=2 整体生成时，自动检测
+        overall_image_index = None
+        has_reference_image = False
+        component_count = 0
+        component_images = []
+
+        if mode == 2:
+            # 自动获取部件图片（排除 overall.png）
+            component_image_paths = get_processed_component_images(exclude_overall=True)
+            component_count = len(component_image_paths)
+            component_images = [path_to_url(p) for p in component_image_paths]
+
+            print(f"[generate_prompt] 检测到 {component_count} 个部件图片")
+            for url in component_images:
+                print(f"  - {url}")
+
+            # 自动生成 component_image_mapping（文件名 -> 索引）
+            if not component_image_mapping:
+                component_image_mapping = {}
+                for i, path in enumerate(component_image_paths):
+                    name = os.path.splitext(os.path.basename(path))[0]
+                    component_image_mapping[name] = i
+                print(f"[generate_prompt] 自动生成索引映射: {component_image_mapping}")
+
+            # 检查 original_image/ 是否有粗糙参考图
+            reference_image = get_original_image()
+            if reference_image:
+                has_reference_image = True
+                overall_image_index = component_count  # 粗糙参考图放在末尾
+                print(f"[generate_prompt] 粗糙参考图索引: {overall_image_index}")
+            else:
+                print("[generate_prompt] 无粗糙参考图")
+
+        # 调用 generate.py 生成提示词
+        prompt = process_generate_request(
+            t=mode,
+            component_name=component_name,
+            trigger_generate=1,
+            memory_db=memory_db,
+            component_image_mapping=component_image_mapping,
+            overall_image_index=overall_image_index
+        )
+
+        if not prompt:
+            return jsonify({
+                "success": False,
+                "error": "提示词生成失败"
+            }), 500
+
+        # 构建返回结果（提示词翻译成英文后再传给前端）
+        result = {
+            "success": True,
+            "prompt": translate_to_english(prompt)
+        }
+
+        # mode=2 时返回详细信息
+        if mode == 2:
+            result["has_reference_image"] = has_reference_image
+            result["component_count"] = component_count
+            result["component_images"] = component_images
+            if overall_image_index is not None:
+                result["overall_image_index"] = overall_image_index
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/generate_image', methods=['POST'])
+def api_generate_image():
+    """
+    调用 ComfyUI 生成图像（使用提示词）
+
+    前端流程：
+    1. 用户将参考图放入 original_image/ 文件夹
+    2. 用户对着麦克风说话描述设计意图（自动触发 VLM 分析）
+    3. 调用 /generate_prompt 获取提示词
+    4. 用户可修改提示词
+    5. 调用此接口生成图像
+
+    文件夹说明：
+    - original_image/   → 参考图来源（前端上传，始终只有一张）
+    - mode=1（部件）：三张候选图保存到 Component_three/，需调用 /select_component_image 选择
+    - mode=2（整体）：生成图片保存到 generated_images/，自动更新记忆
+    - generated_images/ → 用户选择后的部件图 / 整体图存放位置
+
+    输入:
+        mode=1（部件生成）:
+        {
+            "mode": 1,
+            "prompt": "提示词",
+            "component_name": "履带"  // 必需：部件名称（用于保存文件名）
+            // 不需要 image_paths，系统自动从 original_image/ 读取参考图
+        }
+
+        mode=2（整体生成）:
+        {
+            "mode": 2,
+            "prompt": "提示词",
+            "save_name": "overall"  // 可选，默认为 "overall"
+            // 部件图片系统自动从 processed_images/ 读取（排除 overall.png）
+            // 粗糙参考图系统自动从 original_image/ 读取
+        }
+
+    输出:
+        mode=1:
+        {
+            "success": true,
+            "candidates": ["http://refinity-protofusion.pub.hsuni.top:15902/images/component_three/履带_0.png", ...],
+            "reference_image_used": "original_image/xxx.png",
+            "message": "已生成3张候选图，请调用 /select_component_image 选择一张"
+        }
+
+        mode=2:
+        {
+            "success": true/false,
+            "image_paths": ["processed_images/overall.png"],
+            "reference_image_used": "original_image/xxx.png",
+            "component_images_used": ["processed_images/履带.png", ...]
+        }
+    """
+    try:
+        data = request.json or {}
+        mode = data.get('mode')
+        prompt = data.get('prompt', '')
+        save_name = data.get('save_name')
+        component_name = data.get('component_name')
+        seed = data.get('seed')
+
+        # 项目目录（用于路径转换）
+        project_dir = os.path.dirname(os.path.abspath(__file__))
+        processed_images_dir = os.path.join(project_dir, "processed_images")
+
+        if mode is None:
+            return jsonify({
+                "success": False,
+                "error": "缺少 mode 参数（1=部件，2=整体）"
+            }), 400
+
+        if not prompt:
+            return jsonify({
+                "success": False,
+                "error": "缺少 prompt 参数"
+            }), 400
+
+        # 调用 ComfyUI 生成图像
+        if mode == 1:
+            # 部件生成：自动从 original_image/ 读取参考图
+            reference_image = get_original_image()
+
+            if not reference_image:
+                return jsonify({
+                    "success": False,
+                    "error": "original_image/ 中没有参考图片，请先上传参考图"
+                }), 400
+
+            # 部件名称用于保存文件名
+            if not save_name and not component_name:
+                return jsonify({
+                    "success": False,
+                    "error": "部件生成需要 component_name 或 save_name"
+                }), 400
+
+            final_save_name = save_name or component_name
+
+            print(f"[generate_image] 部件生成（3张候选图）: {final_save_name}")
+            print(f"[generate_image] 参考图: {reference_image}")
+
+            import random
+            saved_paths = []
+            for i in range(3):
+                seed = random.randint(1, 999999)
+                paths = generate_component_image(
+                    prompt=prompt,
+                    image_path=reference_image,
+                    save_name=final_save_name,
+                    seed=seed
+                )
+                if paths:
+                    # 重命名为 {final_save_name}_{i}.png
+                    import shutil
+                    new_path = os.path.join(COMPONENT_THREE_DIR, f"{final_save_name}_{i}{os.path.splitext(paths[0])[1]}")
+                    shutil.move(paths[0], new_path)
+                    saved_paths.append(new_path)
+                    print(f"[generate_image] 候选图 {i}: {new_path}")
+
+            if not saved_paths:
+                return jsonify({
+                    "success": False,
+                    "error": "图像生成失败"
+                }), 500
+
+            # 返回候选图列表（Component_three/ 中的图片）
+            candidate_urls = [path_to_url(p) for p in saved_paths]
+
+            return jsonify({
+                "success": True,
+                "candidates": candidate_urls,
+                "reference_image_used": path_to_url(reference_image),
+                "message": "已生成3张候选图，请调用 /select_component_image 选择一张"
+            })
+
+        elif mode == 2:
+            # 整体生成：自动读取 processed_images/ 的部件图 + original_image/ 的粗糙参考图
+
+            # 自动获取所有部件图片（排除 overall.png）
+            component_image_paths = get_processed_component_images(exclude_overall=True)
+
+            if len(component_image_paths) == 0:
+                return jsonify({
+                    "success": False,
+                    "error": "processed_images/ 中没有部件图片，请先生成部件"
+                }), 400
+
+            # 获取粗糙参考图
+            reference_image = get_original_image()
+
+            # 组合图片数组：部件图 + 粗糙参考图（如果有）
+            final_image_paths = list(component_image_paths)  # 复制一份
+
+            if reference_image:
+                final_image_paths.append(reference_image)
+                print(f"[generate_image] 整体生成: {len(component_image_paths)} 张部件图 + 1 张粗糙参考图")
+                print(f"[generate_image] 粗糙参考图: {reference_image}")
+            else:
+                print(f"[generate_image] 整体生成: {len(component_image_paths)} 张部件图（无粗糙参考图）")
+
+            # 默认保存名为 overall
+            final_save_name = save_name or "overall"
+
+            saved_paths = generate_overall_image(
+                prompt=prompt,
+                image_paths=final_image_paths,
+                save_name=final_save_name
+            )
+
+            if not saved_paths:
+                return jsonify({
+                    "success": False,
+                    "error": "图像生成失败"
+                }), 500
+
+            # 更新记忆（图片移动到 processed_images）
+            batch_update_images(memory_db)
+            save_memory()
+
+            # 转换路径：generated_images → processed_images
+            final_paths = []
+            for path in saved_paths:
+                filename = os.path.basename(path)
+                final_path = os.path.join(processed_images_dir, filename)
+                final_paths.append(path_to_url(final_path))
+
+            # 转换部件图路径为 URL
+            component_image_urls = [path_to_url(p) for p in component_image_paths]
+
+            result = {
+                "success": True,
+                "image_paths": final_paths,
+                "component_count": len(component_image_paths),
+                "component_images_used": component_image_urls  # 返回使用的部件图 URL
+            }
+
+            if reference_image:
+                result["reference_image_used"] = path_to_url(reference_image)
+                result["overall_image_index"] = len(component_image_paths)  # 粗糙参考图的索引
+
+            return jsonify(result)
+
+        else:
+            return jsonify({
+                "success": False,
+                "error": "无效的 mode（只能是 1 或 2）"
+            }), 400
+
+    except Exception as e:
+        import traceback
+        print(f"[generate_image] ERROR: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/select_component_image', methods=['POST'])
+def api_select_component_image():
+    """
+    用户从 Component_three/ 中选择一张部件候选图
+
+    流程：
+    1. 用户调用 /generate_image (mode=1) 生成3张候选图到 Component_three/
+    2. 前端展示候选图，用户选择一张
+    3. 调用此接口，传入选中的文件名（如 "履带_1.png"）
+    4. 系统将选中图片复制到 generated_images/（重命名为 {component_name}.png）
+    5. 清空 Component_three/ 中的所有图片
+    6. 调用 batch_update_images 更新记忆，图片移动到 processed_images/
+
+    输入:
+        {
+            "component_name": "履带",          // 必需：部件名称
+            "selected_filename": "履带_1.png"  // 必需：选中的候选图文件名
+        }
+
+    输出:
+        {
+            "success": true,
+            "image_paths": ["http://refinity-protofusion.pub.hsuni.top:15902/images/processed/履带.png"],
+            "message": "已选择履带_1.png，已更新记忆"
+        }
+    """
+    try:
+        data = request.json or {}
+        component_name = data.get('component_name')
+        selected_filename = data.get('selected_filename')
+
+        if not component_name:
+            return jsonify({
+                "success": False,
+                "error": "缺少 component_name 参数"
+            }), 400
+
+        if not selected_filename:
+            return jsonify({
+                "success": False,
+                "error": "缺少 selected_filename 参数"
+            }), 400
+
+        # 检查 Component_three 中是否存在该文件
+        candidate_path = os.path.join(COMPONENT_THREE_DIR, selected_filename)
+        if not os.path.exists(candidate_path):
+            return jsonify({
+                "success": False,
+                "error": f"候选图不存在: {selected_filename}"
+            }), 400
+
+        # 将选中图片复制到 generated_images/，重命名为 {component_name}.png
+        import shutil
+        target_filename = f"{component_name}{os.path.splitext(selected_filename)[1]}"
+        target_path = os.path.join(GENERATED_IMAGE_DIR, target_filename)
+        shutil.copy(candidate_path, target_path)
+        print(f"[select] 已复制: {selected_filename} → {target_filename}")
+
+        # 同时复制一份到 3d_image/（用于后续 3D 模型生成）
+        # 复制前先删除旧素材
+        for f in os.listdir(THREE_D_IMAGE_DIR):
+            if os.path.splitext(f)[1].lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'}:
+                try:
+                    os.remove(os.path.join(THREE_D_IMAGE_DIR, f))
+                    print(f"[select] 已删除旧 3D 素材: {f}")
+                except Exception:
+                    pass
+        three_d_target_path = os.path.join(THREE_D_IMAGE_DIR, target_filename)
+        shutil.copy(candidate_path, three_d_target_path)
+        print(f"[select] 已复制 3D 素材: {target_filename} → 3d_image/")
+
+        # 清空 Component_three/ 中的所有图片
+        image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'}
+        for f in os.listdir(COMPONENT_THREE_DIR):
+            ext = os.path.splitext(f)[1].lower()
+            if ext in image_extensions:
+                os.remove(os.path.join(COMPONENT_THREE_DIR, f))
+                print(f"[select] 已删除候选图: {f}")
+
+        # 更新记忆（图片移动到 processed_images）
+        batch_update_images(memory_db)
+        save_memory()
+
+        # 转换路径为 URL
+        final_path = os.path.join(PROCESSED_IMAGE_DIR, target_filename)
+        final_url = path_to_url(final_path)
+
+        return jsonify({
+            "success": True,
+            "image_paths": [final_url],
+            "message": f"已选择 {selected_filename}，已更新记忆"
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/update_memory_from_prompt', methods=['POST'])
+def api_update_memory_from_prompt():
+    """
+    从用户修改的提示词中自动更新记忆
+
+    使用流程：
+    1. 用户调用 /generate_prompt 获取 AI 生成的提示词
+    2. 用户在前端修改提示词（调整设计意图）
+    3. 调用此接口，系统对比差异并自动更新记忆
+
+    输入:
+        mode=1（部件生成）:
+        {
+            "mode": 1,
+            "component_name": "履带",           // 原始调用时使用的部件名
+            "ai_prompt": "AI生成的原始提示词",    // /generate_prompt 返回的 prompt
+            "user_prompt": "用户修改后的提示词"    // 前端用户修改后的版本
+        }
+
+        mode=2（整体生成）:
+        {
+            "mode": 2,
+            "ai_prompt": "AI生成的原始提示词",
+            "user_prompt": "用户修改后的提示词"
+            // mode=2 不需要 component_name
+        }
+
+    输出:
+        {
+            "success": true,
+            "changes_detected": true/false,
+            "detected_changes": {
+                "appearance_changes": ["采用黑色金属材质"],
+                "function_changes": ["增强全地形能力"],
+                "structure_changes": [],
+                "component_name_changed": false
+            },
+            "actions_taken": ["updated appearance for 履带"],
+            "new_component_created": false,
+            "new_component_name": null
+        }
+    """
+    try:
+        data = request.json or {}
+        mode = data.get('mode')
+        component_name = data.get('component_name', '')
+        ai_prompt = data.get('ai_prompt')
+        user_prompt = data.get('user_prompt')
+
+        if mode is None:
+            return jsonify({
+                "success": False,
+                "error": "缺少 mode 参数（1=部件，2=整体）"
+            }), 400
+
+        if not ai_prompt:
+            return jsonify({
+                "success": False,
+                "error": "缺少 ai_prompt 参数"
+            }), 400
+
+        if not user_prompt:
+            return jsonify({
+                "success": False,
+                "error": "缺少 user_prompt 参数"
+            }), 400
+
+        if mode == 1 and not component_name:
+            return jsonify({
+                "success": False,
+                "error": "mode=1 时需要 component_name 参数"
+            }), 400
+
+        result = update_memory_from_prompt_change(
+            mode=mode,
+            component_name=component_name,
+            ai_prompt=ai_prompt,
+            user_prompt=user_prompt,
+            memory_db=memory_db
+        )
+
+        # 如果有实际变更，保存记忆
+        if result.get("success") and result.get("actions_taken"):
+            save_memory()
+            print(f"[UpdateMemory] 记忆已保存到磁盘")
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/generate_from_answer', methods=['POST'])
+def api_generate_from_answer():
+    """
+    从最新 AI 回答自动生成图片（mico=1 问答后调用）
+
+    流程：
+    1. 用户在 mico=1 模式下提问 → AI 回答 → 系统自动记录
+    2. 用户调用此接口（不需要传入回答内容）
+    3. 系统自动获取最新 AI 回答
+    4. LLM 提取英文提示词
+    5. 调用 ComfyUI Text-to-Image 生成图片
+    6. 清空 AI 回答记录（下次问答会用新的）
+
+    输入:
+        {
+            "save_name": "ai_design"  // 可选：保存文件名
+        }
+
+    输出:
+        {
+            "success": true,
+            "ai_answer": "原始AI回答",
+            "prompt": "提取的英文提示词",
+            "image_paths": ["generated_images/ai_design_01.png"]
+        }
+
+    错误情况：
+        {
+            "success": false,
+            "error": "没有AI回答记录，请先在mico=1模式下提问"
+        }
+    """
+    try:
+        data = request.json or {}
+        save_name = data.get('save_name', 'ai_design')
+        answer = data.get('answer', '')  # 新增：可选，直接传入 AI 回答
+
+        # 调用生成函数（可传入 answer 参数）
+        kwargs = {"save_name": save_name}
+        if answer:
+            kwargs["ai_answer"] = answer
+        result = generate_image_from_ai_answer(**kwargs)
+
+        # 转换图片路径为 URL
+        if result.get("success") and result.get("image_paths"):
+            result["image_paths"] = [path_to_url(p) for p in result["image_paths"]]
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/speech_transcribe', methods=['POST'])
+def api_speech_transcribe():
+    """
+    录音文件转写（iOS 前端录音上传）
+
+    流程：
+    - 前端 SpeechManager 在内存中录成 WAV（16kHz/16bit/单声道）
+    - 通过 multipart/form-data 上传到本接口
+    - 后端调用讯飞录音文件转写大模型（/v2/upload + /v2/getResult 轮询）
+    - 返回识别文本，前端再以文本调用 /vlm_analysis、/qa_switch 等接口
+
+    输入: multipart/form-data
+        - 字段名 "audio"，filename recording.wav，MIME audio/wav
+        - 可选字段 "language"：讯飞语种参数（autodialect=中英+方言 默认；en=纯英文；autominor=37语种）
+
+    输出:
+        {
+            "success": true,
+            "text": "识别出的文本"
+        }
+    """
+    try:
+        if 'audio' not in request.files:
+            return jsonify({
+                "success": False,
+                "error": "缺少 audio 文件"
+            }), 400
+
+        file = request.files['audio']
+        audio_bytes = file.read()
+        if not audio_bytes:
+            return jsonify({
+                "success": False,
+                "error": "音频内容为空"
+            }), 400
+
+        filename = file.filename or "recording.wav"
+        language = request.form.get('language') or "autodialect"
+        print(f"[speech_transcribe] 收到音频: {filename}, {len(audio_bytes)} 字节, language={language}")
+
+        text = transcribe_audio(audio_bytes, filename, language)
+        print(f"[speech_transcribe] 转写结果: '{text[:100]}'")
+
+        # 用户说话为中文，识别结果统一直译成英文，保证后续 /vlm_analysis、/qa_switch 等全链路英文处理
+        text = translate_to_english(text, literal=True)
+        print(f"[speech_transcribe] 已直译为英文: '{text[:100]}'")
+
+        return jsonify({
+            "success": True,
+            "text": text
+        })
+
+    except Exception as e:
+        print(f"[speech_transcribe] 转写异常: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/qa_switch', methods=['POST'])
+def api_qa_switch():
+    """
+    问答处理（mico=1→0 切换时调用）
+
+    流程：
+    - 传入 question：直接用问题调用 LLM（测试模式）
+    - 不传入 question：获取累积语音 → 调用 LLM（正常模式）
+
+    输入:
+        {
+            "question": "你觉得履带应该设计成什么风格？"  // 可选：测试时直接传入
+        }
+
+    输出:
+        {
+            "success": true/false,
+            "question": "用户的问题",
+            "answer": "AI的回答"
+        }
+    """
+    try:
+        data = request.json or {}
+        question = data.get('question', '')
+
+        # 如果传入问题，直接处理（测试模式）
+        if question:
+            print(f"[qa_switch] 测试模式，问题: {question}")
+            from record import process_user_question
+            answer = process_user_question(question, memory_db=memory_db)
+            answer = translate_to_english(answer)
+            print(f"[qa_switch] AI 回答: {answer[:50]}...")
+            print(f"[qa_switch] _latest_ai_answer 已设置，长度: {len(answer)}")
+            return jsonify({
+                "success": True,
+                "question": question,
+                "answer": answer
+            })
+
+        # 否则从累积语音获取（正常模式）
+        result = handle_qa_switch()
+        if isinstance(result.get('answer'), str):
+            result['answer'] = translate_to_english(result['answer'])
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/ai_feedback', methods=['POST'])
+def api_ai_feedback():
+    """
+    AI 反馈生成（前端按需调用）
+
+    当 /vlm_analysis 返回 should_feedback=True 时，
+    前端可以调用此接口获取 AI 建议。
+
+    输入:
+        {
+            "component_name": "履带",    // 必需
+            "parsed_vlm": {...}          // 必需：/vlm_analysis 返回的 parsed_vlm
+        }
+
+    输出:
+        {
+            "success": true,
+            "feedback": {
+                "content": "AI建议内容",
+                "scores": {
+                    "Novelty": 85,
+                    "Value": 90,
+                    "Feasibility": 95,
+                    "Context-specific": 98
+                },
+                "total_score": 92.0
+            }
+        }
+    """
+    global _latest_feedback
+    try:
+        data = request.json or {}
+        component_name = data.get('component_name', '')
+        parsed_vlm = data.get('parsed_vlm', {})
+
+        if not component_name:
+            return jsonify({
+                "success": False,
+                "error": "缺少 component_name 参数"
+            }), 400
+
+        if not parsed_vlm:
+            return jsonify({
+                "success": False,
+                "error": "缺少 parsed_vlm 参数（需要从 /vlm_analysis 返回值中获取）"
+            }), 400
+
+        # 调用 Feedback.py 的 AI 反馈生成函数
+        feedback = generate_ai_feedback(component_name, parsed_vlm, memory_db)
+
+        # AI 反馈内容翻译成英文后再交给前端
+        if isinstance(feedback, dict) and isinstance(feedback.get("content"), str):
+            feedback["content"] = translate_to_english(feedback["content"])
+
+        # 存下最近一条反馈，供 /latest_feedback 读后即焚轮询
+        _latest_feedback = {
+            "component_name": component_name,
+            **feedback
+        }
+
+        return jsonify({
+            "success": True,
+            "feedback": feedback
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/latest_feedback', methods=['GET'])
+def api_latest_feedback():
+    """
+    轮询最新 AI 反馈（读后即焚）
+
+    前端 AINotificationViewModel 定时轮询此接口，
+    获取最近一次 /ai_feedback 生成的建议，读取后立即清空。
+
+    输入: 无
+
+    输出:
+        {
+            "success": true,
+            "feedback": {
+                "component_name": "履带",
+                "content": "AI建议内容",
+                "scores": {"Novelty": 85, "Value": 90, "Feasibility": 95, "Context-specific": 98},
+                "total_score": 92.0
+            }
+        }
+        无待读取时 feedback 为 null
+    """
+    global _latest_feedback
+    feedback = _latest_feedback
+    _latest_feedback = None
+    return jsonify({
+        "success": True,
+        "feedback": feedback
+    })
+
+
+# ==================== 用户反馈接口 ====================
+
+@app.route('/user_feedback', methods=['POST'])
+def api_user_feedback():
+    """
+    处理用户对 AI 建议的反馈
+
+    当用户对 AI 建议表达偏好时，分析反馈内容并更新评分权重，
+    使后续建议更贴合用户偏好。
+
+    输入:
+        {
+            "feedback": "我觉得可以更新颖一些"  // 必需：用户反馈文本
+        }
+
+    输出:
+        {
+            "success": true/false,
+            "dimension_changes": {"Novelty": +0.1, "Feasibility": -0.1},
+            "updated_weights": {"Novelty": 1.1, "Value": 1.0, "Feasibility": 0.9, "Context-specific": 1.0},
+            "analysis": "用户希望建议更创新，不太在意可行性"
+        }
+    """
+    try:
+        data = request.json or {}
+        feedback = data.get('feedback', '')
+
+        if not feedback:
+            return jsonify({
+                "success": False,
+                "error": "缺少 feedback 参数"
+            }), 400
+
+        result = process_user_feedback(feedback)
+
+        return jsonify({
+            "success": True,
+            "dimension_changes": result.get("dimension_changes", {}),
+            "updated_weights": result.get("updated_weights", {}),
+            "analysis": result.get("analysis", "")
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+# ==================== 状态查询接口 ====================
+
+@app.route('/memory_status', methods=['GET'])
+def api_memory_status():
+    """
+    查询记忆数据库状态
+
+    输入: 无
+
+    输出:
+        {
+            "total_nodes": 5,
+            "component_count": 4,
+            "overall_count": 1,
+            "components": ["履带", "底座", ...],
+            "overall_exists": true/false,
+            "speech_running": true/false,
+            "accumulated_text": "...",
+            "has_speech_text": true/false
+        }
+    """
+    return jsonify(get_memory_status())
+
+
+@app.route('/components_list', methods=['GET'])
+def api_components_list():
+    """
+    获取所有部件名称列表
+
+    输入: 无
+
+    输出:
+        {
+            "components": [
+                {"name": "履带", "node_id": "..."},
+                {"name": "底座", "node_id": "..."}
+            ]
+        }
+    """
+    components = []
+    for node_id, data in memory_db.items():
+        if data.get('node_type') == 'COMPONENT':
+            components.append({
+                "name": data.get('component_name', 'unknown'),
+                "node_id": node_id
+            })
+
+    return jsonify({"components": components})
+
+
+@app.route('/components_info', methods=['GET'])
+def api_components_info():
+    """
+    获取所有部件的结构/功能/待确定信息
+
+    输入: 无
+
+    输出:
+        {
+            "structure_info": ["履带：齿轮连接结构", ...],
+            "function_info": ["履带：平稳行走", ...],
+            "uncertain_info": ["履带：外形风格不确定", ...]
+        }
+    """
+    info = get_components_info()
+    # 结构/功能/待确定点统一翻译成英文后再传给前端
+    return jsonify({
+        "appearance_info": translate_strings(info.get("appearance_info", [])),
+        "structure_info": translate_strings(info.get("structure_info", [])),
+        "function_info": translate_strings(info.get("function_info", [])),
+        "uncertain_info": translate_strings(info.get("uncertain_info", []))
+    })
+
+
+@app.route('/update_description', methods=['POST'])
+def api_update_description():
+    """
+    前端直接修改记忆中的描述内容
+
+    输入:
+        {
+            "target_name": "Track",          // 部件名称或 "overall"
+            "desc_type": "structure",        // 描述类型：structure/function/uncertain
+            "old_content": "Gear connection...", // 原来的内容（用于定位）
+            "new_content": "Threaded connection..." // 修改后的内容
+        }
+
+    输出:
+        {
+            "success": true/false,
+            "message": "提示信息"
+        }
+    """
+    try:
+        data = request.get_json()
+
+        target_name = data.get('target_name')
+        desc_type = data.get('desc_type')
+        old_content = data.get('old_content')
+        new_content = data.get('new_content')
+
+        if not target_name:
+            return jsonify({
+                "success": False,
+                "message": "缺少 target_name 参数（部件名称或'整体'）"
+            }), 400
+
+        if not desc_type:
+            return jsonify({
+                "success": False,
+                "message": "缺少 desc_type 参数（结构/功能/不确定点）"
+            }), 400
+
+        if not old_content:
+            return jsonify({
+                "success": False,
+                "message": "缺少 old_content 参数（原来的内容）"
+            }), 400
+
+        if not new_content:
+            return jsonify({
+                "success": False,
+                "message": "缺少 new_content 参数（修改后的内容）"
+            }), 400
+
+        success, message = update_description_content(
+            memory_db=memory_db,
+            target_name=target_name,
+            desc_type=desc_type,
+            old_content=old_content,
+            new_content=new_content
+        )
+
+        # 如果成功，保存记忆
+        if success:
+            save_memory()
+
+        return jsonify({
+            "success": success,
+            "message": message
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+@app.route('/memory_qa', methods=['POST'])
+def api_memory_qa():
+    """
+    多轮问答：AI生成最多3个问题，逐个询问用户。
+
+    使用流程：
+    1. 第一次调用（不传参数）→ AI分析记忆并生成最多3个问题
+    2. 用户回答后（只传 answer）→ AI自动匹配当前问题并更新记忆，继续问下一个
+    3. 当所有问题都回答完后，AI会重新分析记忆，可能生成新的问题
+    4. 循环直到 has_questions=false
+
+    用户只需要输入回答内容！不需要输入部件名和描述类型！
+
+    输入:
+        {
+            "answer": "科技风格，金属材质"  // 可选，用户回答（纯文本）
+        }
+        如果不传参数，表示开始新一轮问答
+
+    输出:
+        {
+            "has_questions": true/false,
+            "questions": [
+                {
+                    "target": "履带",
+                    "desc_type": "外形",
+                    "issue_type": "缺失",
+                    "issue": "外形描述完全缺失",
+                    "question": "履带的外形风格您希望是什么？"
+                },
+                ...最多3个
+            ],
+            "current_index": 0,  // 当前正在问第几个问题（0开始）
+            "current_question": {...},  // 当前正在问的问题（方便前端显示）
+            "update_result": "已为履带添加外形描述" 或 null,
+            "remaining_count": 2  // 还剩多少问题没问
+        }
+
+        当 has_questions=false 时，表示没有需要询问的问题了
+    """
+    try:
+        print("[DEBUG] /memory_qa 开始处理请求")
+        data = request.get_json() or {}
+
+        # 用户只需要传入回答内容（字符串）
+        user_answer = data.get('answer') if data.get('answer') else None
+        print(f"[DEBUG] user_answer={user_answer}")
+        print(f"[DEBUG] memory_db 节点数={len(memory_db)}")
+
+        result = memory_qa_round(memory_db, user_answer)
+        print(f"[DEBUG] memory_qa_round 返回成功, type={type(result)}")
+        print(f"[DEBUG] result keys={list(result.keys()) if result else 'None'}")
+        print(f"[DEBUG] result={json.dumps(result, ensure_ascii=False, default=str)[:500]}")
+
+        # 如果有更新（不是跳过、失败、没有待回答），保存记忆
+        update_result = result.get('update_result', '')
+        if update_result and '失败' not in update_result and '没有待回答' not in update_result and '跳过' not in update_result:
+            save_memory()
+            print("[DEBUG] 保存记忆成功")
+
+        # 前端展示需要英文：把问题列表逐条翻译（question/issue），失败回退原文
+        for q in result.get('questions', []):
+            if isinstance(q, dict):
+                q['question'] = translate_to_english(q.get('question', ''))
+                q['issue'] = translate_to_english(q.get('issue', ''))
+        if isinstance(result.get('update_result'), str):
+            result['update_result'] = translate_to_english(result['update_result'])
+
+        print("[DEBUG] 准备返回 jsonify")
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "has_questions": False,
+            "questions": [],
+            "current_index": 0,
+            "current_question": None,
+            "update_result": None,
+            "remaining_count": 0,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/uncertain_suggestions', methods=['GET'])
+def api_uncertain_suggestions():
+    """
+    提取所有 status=0 的不确定内容，为每个生成简短建议
+
+    输入: 无
+
+    输出:
+        {
+            "has_uncertain": true/false,
+            "uncertain_items": [
+                {
+                    "id": 1,
+                    "target": "履带",
+                    "type": "外形",
+                    "content": "还没想好外形风格",
+                    "suggestion": "可考虑科技风格，与整体功能定位匹配"
+                }
+            ],
+            "count": 3
+        }
+    """
+    try:
+        result = get_uncertain_suggestions(memory_db)
+        # 将待确定点的内容与建议翻译成英文后再传给前端
+        # （target/type 使用英文定位标识：appearance/function/structure、overall，
+        #   保证 confirm_suggestion 写回时能匹配）
+        items = result.get("uncertain_items", [])
+        for item in items:
+            item["content"] = translate_to_english(item.get("content", ""))
+            item["suggestion"] = translate_to_english(item.get("suggestion", ""))
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "has_uncertain": False,
+            "uncertain_items": [],
+            "count": 0,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/confirm_suggestion', methods=['POST'])
+def api_confirm_suggestion():
+    """
+    用户确认采纳不确定建议后，用 LLM 提取有效信息并更新记忆。
+
+    输入:
+        {
+            "target": "Track",             // 部件名称或"overall"
+            "type": "appearance",          // 描述类型：appearance/function/structure
+            "content": "Surface texture...", // 原始不确定内容
+            "suggestion": "建议内容"       // AI 给出的建议
+        }
+
+    输出:
+        {
+            "success": true,
+            "updated_content": "提取后的确定描述",
+            "message": "已更新"
+        }
+    """
+    try:
+        data = request.json or {}
+        target = data.get('target', '')
+        desc_type = data.get('type', '')
+        content = data.get('content', '')
+        suggestion = data.get('suggestion', '')
+
+        if not target or not desc_type or not content or not suggestion:
+            return jsonify({"error": "缺少 target/type/content/suggestion 参数"}), 400
+
+        result = confirm_suggestion(memory_db, target, desc_type, content, suggestion)
+
+        # 更新成功后保存记忆
+        if result.get("success"):
+            save_memory()
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+# ==================== 语音管理接口 ====================
+
+@app.route('/speech_text', methods=['GET'])
+def api_speech_text():
+    """
+    获取当前累积的语音文本（不清空）
+
+    输入: 无
+
+    输出:
+        {
+            "text": "当前累积的语音文本",
+            "has_text": true/false
+        }
+    """
+    text = get_current_speech_text()
+    has_text = len(text.strip()) > 0
+
+    return jsonify({
+        "text": text,
+        "has_text": has_text
+    })
+
+
+@app.route('/speech_clear', methods=['POST'])
+def api_speech_clear():
+    """
+    清空累积的语音文本
+
+    输入: 无
+
+    输出:
+        {
+            "success": true
+        }
+    """
+    try:
+        clear_speech_text()
+        return jsonify({"success": True})
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+# ==================== mico 模式管理接口 ====================
+
+@app.route('/mico_mode', methods=['GET'])
+def api_mico_mode():
+    """
+    获取当前 mico 模式
+
+    输入: 无
+
+    输出:
+        {
+            "mode": 0 或 1      // 0=分贝检测，1=持续发送
+        }
+    """
+    mode = get_current_mico_mode()
+    return jsonify({"mode": mode})
+
+
+@app.route('/mico_switch', methods=['POST'])
+def api_mico_switch():
+    """
+    切换 mico 模式
+
+    mico=0: 分贝检测模式，自动触发 VLM 分析
+    mico=1: 持续发送模式，用于 LLM 问答
+    mico=2: 用户反馈录制模式，切回 mico=0 时自动处理反馈
+
+    输入:
+        {
+            "mode": 0 或 1 或 2    // 必需
+        }
+
+    输出:
+        {
+            "success": true,
+            "mode": 0 或 1 或 2,
+            "text": "切换时累积的文本"（仅从1切换到0时有值）
+        }
+    """
+    try:
+        data = request.json or {}
+        new_mode = data.get('mode')
+
+        if new_mode is None:
+            return jsonify({
+                "success": False,
+                "error": "缺少 mode 参数"
+            }), 400
+
+        # 调用 main.py 的模式切换
+        result = switch_mico_mode(new_mode)
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+# ==================== 3D 模型生成接口 ====================
+
+
+def _clear_3d_image_folder():
+    """删除 3d_image/ 中的所有图片（3D 生成成功后调用）"""
+    image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'}
+    for f in os.listdir(THREE_D_IMAGE_DIR):
+        if os.path.splitext(f)[1].lower() in image_extensions:
+            try:
+                os.remove(os.path.join(THREE_D_IMAGE_DIR, f))
+                print(f"[3D] 已删除素材图: {f}")
+            except Exception as e:
+                print(f"[3D] 删除素材图失败: {e}")
+
+@app.route('/upload_3d_image', methods=['POST'])
+def api_upload_3d_image():
+    """
+    上传 2D 素材图到 3d_image/ 文件夹。
+    每次上传会替换掉旧的文件（始终只保留一张）。
+
+    输入: multipart/form-data，字段名 "image"
+    输出: {"success": true, "filename": "xxx.png", "url": "http://..."}
+    """
+    try:
+        if 'image' not in request.files:
+            return jsonify({"error": "缺少 image 文件"}), 400
+
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({"error": "文件名为空"}), 400
+
+        save_path = update_3d_image(file)
+
+        return jsonify({
+            "success": True,
+            "filename": os.path.basename(save_path),
+            "url": f"{THREE_D_IMAGE_URL_PREFIX}/{os.path.basename(save_path)}"
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/generate_3d_model', methods=['POST'])
+def api_generate_3d_model():
+    """
+    将 3d_image/ 中的 2D 素材发送给第三方 3D 生成引擎，生成 3D 模型。
+
+    纯 image-to-3D 模式，不需要文本提示词。
+
+    文件夹说明：
+    - 3d_image/            → 2D 素材图来源（上传新图自动替换旧的）
+    - generated_3d_models/ → 生成的 3D 模型保存位置
+    - 通过 /models/<filename> 路由提供模型文件下载
+
+    输入:
+        {
+            "model_name": "履带"  // 可选：输出文件名（不含扩展名）
+        }
+
+    输出:
+        {
+            "success": true,
+            "model_id": "履带.usdz",
+            "model_url": "/models/履带.usdz",
+            "model_path": "/local/path/to/履带.usdz"
+        }
+    """
+    try:
+        data = request.json or {}
+        model_name = data.get('model_name')
+
+        result = generate_3d_model(
+            model_name=model_name
+        )
+
+        if result.get("success"):
+            # 生成成功后，删除 3d_image/ 中的素材图
+            _clear_3d_image_folder()
+            return jsonify(result)
+        else:
+            return jsonify(result), 500
+
+    except Exception as e:
+        import traceback
+        print(f"[generate_3d_model] ERROR: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/3d_image/<filename>')
+def serve_3d_image(filename):
+    """提供 3d_image/ 文件夹的素材图预览"""
+    filepath = os.path.join(THREE_D_IMAGE_DIR, filename)
+    if os.path.exists(filepath):
+        return send_file(filepath)
+    return jsonify({"error": "素材图不存在"}), 404
+
+
+@app.route('/models/<filename>')
+def serve_3d_model(filename):
+    """提供生成的 3D 模型文件下载"""
+    filepath = os.path.join(MODEL_OUTPUT_DIR, filename)
+    if os.path.exists(filepath):
+        return send_file(filepath)
+    return jsonify({"error": "模型文件不存在"}), 404
+
+
+@app.route('/models_list', methods=['GET'])
+def api_models_list():
+    """
+    获取已处理的部件图片列表及对应的 3D 模型状态
+
+    流程：
+    1. 扫描 processed_images/ 目录获取所有 .png/.jpg 图片
+    2. 检查 generated_3d_models/ 中是否有同名 .usdz 文件
+    3. 返回图片列表，包含 3D 模型是否存在的信息
+
+    输出:
+        {
+            "models": [
+                {
+                    "name": "履带",
+                    "image_url": "images/processed/履带.png",
+                    "has_3d_model": true,
+                    "model_url": "/models/履带.usdz"
+                },
+                ...
+            ]
+        }
+    """
+    PROCESSED_DIR = os.path.join(os.path.dirname(__file__), "processed_images")
+    MODELS_DIR = os.path.join(os.path.dirname(__file__), "generated_3d_models")
+
+    image_extensions = {'.png', '.jpg', '.jpeg', '.webp'}
+    model_extension = '.usdz'
+
+    models_list = []
+
+    if os.path.exists(PROCESSED_DIR):
+        for filename in sorted(os.listdir(PROCESSED_DIR)):
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in image_extensions:
+                continue
+
+            # 文件名（不含扩展名）作为部件名
+            name = os.path.splitext(filename)[0]
+            image_url = f"http://refinity-intentrelay.pub.hsuni.top:15902/images/processed/{filename}"
+
+            # 检查是否有对应的 .usdz 文件
+            model_filename = f"{name}{model_extension}"
+            model_path = os.path.join(MODELS_DIR, model_filename)
+            has_3d_model = os.path.exists(model_path)
+            model_url = f"http://refinity-intentrelay.pub.hsuni.top:15902/models/{model_filename}" if has_3d_model else None
+
+            models_list.append({
+                "name": name,
+                "image_url": image_url,
+                "has_3d_model": has_3d_model,
+                "model_url": model_url
+            })
+
+    return jsonify({"models": models_list})
+
+
+# ==================== 错误处理 ====================
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({
+        "success": False,
+        "error": "接口不存在"
+    }), 404
+
+
+@app.errorhandler(500)
+def server_error(e):
+    return jsonify({
+        "success": False,
+        "error": "服务器内部错误"
+    }), 500
+
+
+# ==================== 启动服务 ====================
+
+if __name__ == '__main__':
+    print("\n" + "="*70)
+    print("IntentRelay HTTP API 服务")
+    print("="*70)
+
+    print("\n【系统控制】")
+    print("  GET  /health              - 健康检查")
+    print("  POST /init                - 初始化系统")
+    print("  POST /stop                - 停止系统")
+
+    print("\n【VLM 分析】（使用 Operated_image，分析后清空）")
+    print("  POST /vlm_analysis        - 语音触发（可选图片）")
+    print("  POST /vlm_analysis_images - 手势触发（必需图片）")
+
+    print("\n【AI 反馈】")
+    print("  POST /ai_feedback         - 按需调用")
+    print("  POST /qa_switch           - 问答处理")
+
+    print("\n【图像生成】（自动读取 original_image，输出到 Component_three 或 generated_images）")
+    print("  POST /generate_prompt     - 生成提示词（自动检测粗糙参考图）")
+    print("  POST /generate_image      - 调用 ComfyUI 生成")
+    print("    mode=1（部件）：三张候选图到 Component_three/")
+    print("    mode=2（整体）：部件图由前端传入 + 自动读取粗糙参考图")
+    print("  POST /select_component_image - 用户选择一张部件候选图")
+    print("  POST /update_memory_from_prompt - 对比提示词变化，自动更新记忆")
+
+    print("\n【3D 模型生成】")
+    print("  POST /upload_3d_image    - 上传 2D 素材图到 3d_image/")
+    print("  POST /generate_3d_model  - 将 2D 素材发送给第三方引擎生成 3D 模型")
+    print("  GET  /3d_image/<filename>- 预览 3d_image/ 中的素材图")
+    print("  GET  /models/<filename>  - 下载已生成的 3D 模型文件")
+
+    print("\n【状态查询】")
+    print("  GET  /memory_status       - 查询系统状态")
+    print("  GET  /components_list     - 获取部件列表")
+    print("  GET  /components_info     - 获取部件详情")
+    print("  POST /update_description  - 修改部件描述内容")
+    print("  POST /memory_qa           - 单轮问答：问一句答一句")
+    print("  GET  /uncertain_suggestions - 获取不确定内容建议")
+    print("  POST /confirm_suggestion    - 确认采纳不确定建议")
+
+    print("\n【语音管理】")
+    print("  GET  /speech_text         - 获取累积语音文本")
+    print("  POST /speech_clear        - 清空语音文本")
+    print("  POST /speech_transcribe   - 录音文件转写（iOS端上传WAV）")
+
+    print("\n【mico 模式管理】")
+    print("  GET  /mico_mode           - 获取当前模式")
+    print("  POST /mico_switch         - 切换模式")
+
+    print("\n服务地址: http://refinity-intentrelay.pub.hsuni.top:15902")
+    print("="*70)
+
+    # 自动初始化系统（语音识别保持运行）
+    print("\n[自动初始化] 正在启动系统...")
+    if init_system():
+        _system_initialized = True
+        print("[自动初始化] 系统初始化成功，语音识别已启用")
+    else:
+        print("[自动初始化] 系统初始化失败，请检查配置")
+        print("  - 确保 .env 文件中设置了 GEMINI_API_KEY")
+        print("  - 确保网络可以访问 Gemini API")
+
+    app.run(
+        host='0.0.0.0',
+        port=9000,
+        debug=False,
+        threaded=True
+    )
